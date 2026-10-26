@@ -1,0 +1,165 @@
+name: Build Packages
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ========================================
+  # 多平台编译打包：Linux / Windows / macOS 各环境
+  # ========================================
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ---------- Linux ----------
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+            binary: slowql
+            archive: slowql-linux-amd64
+            pack: tar
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            binary: slowql
+            archive: slowql-linux-amd64-gnu
+            pack: tar
+          - os: ubuntu-22.04
+            target: aarch64-unknown-linux-musl
+            binary: slowql
+            archive: slowql-linux-arm64
+            pack: tar
+            cross: true
+          - os: ubuntu-22.04
+            target: armv7-unknown-linux-musleabihf
+            binary: slowql
+            archive: slowql-linux-armv7
+            pack: tar
+            cross: true
+          # ---------- macOS ----------
+          - os: macos-14
+            target: aarch64-apple-darwin
+            binary: slowql
+            archive: slowql-macos-arm64
+            pack: tar
+          - os: macos-14
+            target: x86_64-apple-darwin
+            binary: slowql
+            archive: slowql-macos-amd64
+            pack: tar
+          # ---------- Windows ----------
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            binary: slowql.exe
+            archive: slowql-windows-amd64
+            pack: zip
+          - os: windows-2022
+            target: aarch64-pc-windows-msvc
+            binary: slowql.exe
+            archive: slowql-windows-arm64
+            pack: zip
+          - os: windows-2022
+            target: x86_64-pc-windows-gnu
+            binary: slowql.exe
+            archive: slowql-windows-amd64-gnu
+            pack: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools
+        if: matrix.cross == true
+        run: cargo install cross --locked
+
+      - name: Build (cross)
+        if: matrix.cross == true
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build (native)
+        if: matrix.cross != true
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # ---------- 打包 ----------
+      - name: Package (tar.gz, unix)
+        if: matrix.pack == 'tar'
+        shell: bash
+        run: |
+          dir="slowql-${{ matrix.archive }}"
+          mkdir -p "$dir"
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} "$dir/"
+          cp README.md LICENSE "$dir/"
+          tar -czf "${{ matrix.archive }}.tar.gz" "$dir"
+
+      - name: Package (zip, windows)
+        if: matrix.pack == 'zip'
+        shell: pwsh
+        run: |
+          $dir = "slowql-${{ matrix.archive }}"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" $dir
+          Copy-Item README.md, LICENSE $dir
+          Compress-Archive -Path $dir -DestinationPath "${{ matrix.archive }}.zip"
+
+      # ---------- 运行时环境自检 ----------
+      - name: Smoke test (unix)
+        if: matrix.pack == 'tar' && matrix.cross != true
+        shell: bash
+        run: target/${{ matrix.target }}/release/slowql --version
+
+      - name: Smoke test (windows)
+        if: matrix.pack == 'zip' && matrix.cross != true
+        shell: pwsh
+        run: target/${{ matrix.target }}/release/${{ matrix.binary }} --version
+
+      - name: Checksum
+        shell: bash
+        run: |
+          if [[ "${{ matrix.pack }}" == "tar" ]]; then
+            f="${{ matrix.archive }}.tar.gz"
+          else
+            f="${{ matrix.archive }}.zip"
+          fi
+          sha256sum "$f" > "$f.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: |
+            slowql-${{ matrix.archive }}.*
+            *.sha256
+
+  # ========================================
+  # tag 触发时：汇总产物并创建 GitHub Release
+  # ========================================
+  release:
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: artifacts/*
