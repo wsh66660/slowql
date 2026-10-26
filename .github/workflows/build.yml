@@ -28,11 +28,13 @@ jobs:
             binary: slowql
             archive: slowql-linux-amd64
             pack: tar
+            cross: true
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             binary: slowql
             archive: slowql-linux-amd64-gnu
             pack: tar
+            smoke: true
           - os: ubuntu-22.04
             target: aarch64-unknown-linux-musl
             binary: slowql
@@ -51,6 +53,7 @@ jobs:
             binary: slowql
             archive: slowql-macos-arm64
             pack: tar
+            smoke: true
           - os: macos-14
             target: x86_64-apple-darwin
             binary: slowql
@@ -62,6 +65,7 @@ jobs:
             binary: slowql.exe
             archive: slowql-windows-amd64
             pack: zip
+            smoke: true
           - os: windows-2022
             target: aarch64-pc-windows-msvc
             binary: slowql.exe
@@ -72,6 +76,7 @@ jobs:
             binary: slowql.exe
             archive: slowql-windows-amd64-gnu
             pack: zip
+            smoke: true
 
     steps:
       - uses: actions/checkout@v4
@@ -116,12 +121,12 @@ jobs:
 
       # ---------- 运行时环境自检 ----------
       - name: Smoke test (unix)
-        if: matrix.pack == 'tar' && matrix.cross != true
+        if: matrix.pack == 'tar' && matrix.smoke == true
         shell: bash
         run: target/${{ matrix.target }}/release/slowql --version
 
       - name: Smoke test (windows)
-        if: matrix.pack == 'zip' && matrix.cross != true
+        if: matrix.pack == 'zip' && matrix.smoke == true
         shell: pwsh
         run: target/${{ matrix.target }}/release/${{ matrix.binary }} --version
 
@@ -133,7 +138,12 @@ jobs:
           else
             f="${{ matrix.archive }}.zip"
           fi
-          sha256sum "$f" > "$f.sha256"
+          # macOS 没有 sha256sum，回退到 shasum
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$f" > "$f.sha256"
+          else
+            shasum -a 256 "$f" > "$f.sha256"
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
