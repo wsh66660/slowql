@@ -150,7 +150,8 @@ jobs:
         with:
           name: ${{ matrix.archive }}
           path: |
-            slowql-${{ matrix.archive }}.*
+            ${{ matrix.archive }}.tar.gz
+            ${{ matrix.archive }}.zip
             *.sha256
 
   # ========================================
